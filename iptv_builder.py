@@ -19,12 +19,11 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 2.0
 
-# --- URLهای پیش‌فرض (اگر env خالی باشد از این‌ها استفاده می‌شود) ---
-FALLBACK_FEEDS_URL = "https://raw.githubusercontent.com/itsyebekhe/PSG/main/feeds.csv"
-FALLBACK_STREAMS_URL = "https://raw.githubusercontent.com/itsyebekhe/PSG/main/streams.json"
+# --- URLهای پیش‌فرض (اگر متغیر محیطی خالی بود از این‌ها استفاده می‌شود) ---
+FALLBACK_FEEDS_URL = "https://iptv-org.github.io/api/feeds.json"
+FALLBACK_STREAMS_URL = "https://iptv-org.github.io/api/streams.json"
 
 def env_or_default(name: str, default: str) -> str:
-    """اگر متغیر محیطی وجود داشت و خالی نبود، همان را برگردان؛ وگرنه پیش‌فرض."""
     val = os.environ.get(name, "").strip()
     return val if val else default
 
@@ -45,10 +44,11 @@ def fetch_url(url: str, timeout: int, retries: int, retry_delay: float) -> reque
     if not url or not url.strip():
         raise ValueError("URL خالی است. مقدار FEEDS_URL یا STREAMS_URL را تنظیم کن.")
     last_exc = None
+    headers = {"User-Agent": "nexa-iptv-builder/1.0"}
     for attempt in range(1, retries + 1):
         try:
             LOG.info("دریافت %s (تلاش %d/%d)", url, attempt, retries)
-            resp = requests.get(url, timeout=timeout)
+            resp = requests.get(url, timeout=timeout, headers=headers)
             resp.raise_for_status()
             return resp
         except requests.RequestException as exc:
@@ -58,33 +58,22 @@ def fetch_url(url: str, timeout: int, retries: int, retry_delay: float) -> reque
                 time.sleep(retry_delay * attempt)
     raise RuntimeError(f"دریافت {url} پس از {retries} تلاش ناموفق بود: {last_exc}") from last_exc
 
-def fetch_dataframe(
-    url: str,
-    data_type: str,
-    timeout: int,
-    retries: int,
-    retry_delay: float,
-) -> pd.DataFrame:
+def fetch_json_dataframe(url: str, timeout: int, retries: int, retry_delay: float) -> pd.DataFrame:
     resp = fetch_url(url, timeout, retries, retry_delay)
     try:
-        if data_type == "csv":
-            return pd.read_csv(io.StringIO(resp.text))
-        elif data_type == "json":
-            data = resp.json()
-            if isinstance(data, dict):
-                if "data" in data and isinstance(data["data"], list):
-                    data = data["data"]
-                else:
-                    data = [data]
-            return pd.DataFrame(data)
-        else:
-            raise ValueError(f"نوع داده ناشناخته: {data_type}")
+        data = resp.json()
+        if isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], list):
+                data = data["data"]
+            else:
+                data = [data]
+        return pd.DataFrame(data)
     except Exception as exc:
         raise RuntimeError(f"تبدیل پاسخ {url} به DataFrame ناموفق بود: {exc}") from exc
 
-def normalize_channel_column(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_channel_column(df: pd.DataFrame, label: str) -> pd.DataFrame:
     if "channel" not in df.columns:
-        raise KeyError("ستون 'channel' در DataFrame وجود ندارد.")
+        raise KeyError(f"ستون 'channel' در {label} وجود ندارد. ستون‌ها: {list(df.columns)}")
     df = df.copy()
     df["channel"] = df["channel"].astype(str).str.strip()
     return df
@@ -112,27 +101,27 @@ def build_m3u_lines(df: pd.DataFrame) -> list:
     for _, row in df.iterrows():
         name = get_first_existing(
             row,
-            ["name", "channel", "title", "name_feed", "name_stream", "channel_feed", "channel_stream"],
+            ["name", "name_feed", "channel", "title", "channel_feed", "channel_stream"],
             "Unknown",
         )
         tvg_id = get_first_existing(
             row,
-            ["tvg_id", "tvg-id", "id", "tvg_id_feed", "tvg_id_stream"],
+            ["channel", "tvg_id", "tvg-id", "id_feed", "id"],
             "",
         )
         tvg_logo = get_first_existing(
             row,
-            ["tvg_logo", "tvg-logo", "logo", "tvg_logo_feed", "tvg_logo_stream"],
+            ["logo", "tvg_logo", "tvg-logo", "logo_feed"],
             "",
         )
         group = get_first_existing(
             row,
-            ["group_title", "group-title", "group", "category", "group_feed", "group_stream"],
+            ["group_title", "group-title", "group", "category", "categories"],
             "",
         )
         url = get_first_existing(
             row,
-            ["url_stream", "stream_url", "url", "link", "stream", "url_feed"],
+            ["url_stream", "url", "stream_url", "link", "stream"],
             "",
         )
         if not url:
@@ -182,13 +171,15 @@ def build_playlists(
     langs: Optional[Sequence[str]],
     output_dir: Path,
 ) -> bool:
-    feeds_df = normalize_channel_column(feeds_df)
-    streams_df = normalize_channel_column(streams_df)
+    feeds_df = normalize_channel_column(feeds_df, "feeds")
+    streams_df = normalize_channel_column(streams_df, "streams")
 
     feeds_df = filter_languages(feeds_df, langs)
 
-    if "language" in feeds_df.columns and "language" in streams_df.columns:
-        streams_df = streams_df.drop(columns=["language"])
+    # حذف ستون‌های تکراری برای جلوگیری از تداخل
+    overlap = [c for c in feeds_df.columns if c in streams_df.columns and c != "channel"]
+    if overlap:
+        streams_df = streams_df.drop(columns=overlap, errors="ignore")
 
     merged = pd.merge(
         feeds_df,
@@ -202,15 +193,14 @@ def build_playlists(
         LOG.error("پس از ادغام، هیچ کانالی پیدا نشد. نوع ستون channel یا فیلتر زبان را بررسی کنید.")
         return False
 
-    ok = True
-    all_path = output_dir / "playlist.m3u"
-    ok = write_playlist(merged, all_path) and ok
+    LOG.info("تعداد کانال‌های ادغام‌شده: %d", len(merged))
 
-    return ok
+    all_path = output_dir / "playlist.m3u"
+    return write_playlist(merged, all_path)
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="سازنده پلی‌لیست IPTV برای Nexa")
-    parser.add_argument("--feeds-url", default=DEFAULT_FEEDS_URL, help="آدرس feeds.csv")
+    parser.add_argument("--feeds-url", default=DEFAULT_FEEDS_URL, help="آدرس feeds.json")
     parser.add_argument("--streams-url", default=DEFAULT_STREAMS_URL, help="آدرس streams.json")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="پوشه خروجی")
     parser.add_argument("--langs", default=DEFAULT_LANGS, help="کدهای زبان جدا شده با کاما")
@@ -236,15 +226,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     langs = [x.strip() for x in args.langs.split(",") if x.strip()] if args.langs else None
 
     try:
-        feeds_df = fetch_dataframe(
-            args.feeds_url, "csv", args.timeout, args.retries, args.retry_delay
+        feeds_df = fetch_json_dataframe(
+            args.feeds_url, args.timeout, args.retries, args.retry_delay
         )
-        streams_df = fetch_dataframe(
-            args.streams_url, "json", args.timeout, args.retries, args.retry_delay
+        streams_df = fetch_json_dataframe(
+            args.streams_url, args.timeout, args.retries, args.retry_delay
         )
     except Exception as exc:
         LOG.error("خطا در دریافت داده‌ها: %s", exc)
         return 1
+
+    LOG.info("تعداد ردیف feeds: %d | تعداد ردیف streams: %d", len(feeds_df), len(streams_df))
 
     output_dir = Path(args.output_dir)
     success = build_playlists(feeds_df, streams_df, langs, output_dir)
@@ -253,7 +245,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         LOG.error("ساخت پلی‌لیست با خطا مواجه شد.")
         return 1
 
-    LOG.info("تمام پلی‌لیست‌ها با موفقیت ساخته شدند.")
+    LOG.info("پلی‌لیست با موفقیت ساخته شد.")
     return 0
 
 if __name__ == "__main__":
