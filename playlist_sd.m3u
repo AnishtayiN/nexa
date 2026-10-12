@@ -201,10 +201,10 @@ https://icnet1hls.wns.live/hls/stream.m3u8
 https://icnet2hls.wns.live/hls/stream.m3u8
 
 #EXTINF:-1 tvg-id="iFilm2.ir" tvg-name="iFilm2.ir" group-title="IR" tvg-language="fas" tvg-quality="576i",iFilm2.ir
-https://live.presstv.ir/hls/ifilm2.m3u8
+https://live.presstv.co.uk/hls/ifilm2.m3u8
 
 #EXTINF:-1 tvg-id="iFilmPersian.ir" tvg-name="iFilmPersian.ir" group-title="IR" tvg-language="fas" tvg-quality="576i",iFilmPersian.ir
-https://live.presstv.ir/hls/ifilmfa.m3u8
+https://live.presstv.co.uk/hls/ifilmfa.m3u8
 
 #EXTINF:-1 tvg-id="iFilmPersian.ir" tvg-name="iFilmPersian.ir" group-title="IR" tvg-language="fas" tvg-quality="576i",iFilmPersian.ir
 https://ncdn.telewebion.ir/ifilm/live/playlist.m3u8
