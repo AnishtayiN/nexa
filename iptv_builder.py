@@ -4,6 +4,7 @@
 import argparse
 import io
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,18 @@ LOG = logging.getLogger("nexa")
 DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 2.0
+
+# مقادیر پیش‌فرض — در صورت نیاز این‌ها را تغییر بده
+DEFAULT_FEEDS_URL = os.environ.get(
+    "FEEDS_URL",
+    "https://raw.githubusercontent.com/itsyebekhe/PSG/main/feeds.csv",
+)
+DEFAULT_STREAMS_URL = os.environ.get(
+    "STREAMS_URL",
+    "https://raw.githubusercontent.com/itsyebekhe/PSG/main/streams.json",
+)
+DEFAULT_OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
+DEFAULT_LANGS = os.environ.get("LANGS", "")  # مثلاً "fas,eng"
 
 def setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(
@@ -89,7 +102,7 @@ def get_first_existing(row: pd.Series, candidates: Iterable[str], default: str =
                 return str(val).strip()
     return default
 
-def build_m3u_lines(df: pd.DataFrame) -> list[str]:
+def build_m3u_lines(df: pd.DataFrame) -> list:
     lines = ["#EXTM3U"]
     for _, row in df.iterrows():
         name = get_first_existing(
@@ -114,7 +127,7 @@ def build_m3u_lines(df: pd.DataFrame) -> list[str]:
         )
         url = get_first_existing(
             row,
-            ["url_stream", "stream_url", "url", "link", "stream", "url_feed", "url_stream"],
+            ["url_stream", "stream_url", "url", "link", "stream", "url_feed"],
             "",
         )
         if not url:
@@ -169,7 +182,6 @@ def build_playlists(
 
     feeds_df = filter_languages(feeds_df, langs)
 
-    # جلوگیری از تداخل ستون language در ادغام
     if "language" in feeds_df.columns and "language" in streams_df.columns:
         streams_df = streams_df.drop(columns=["language"])
 
@@ -186,12 +198,9 @@ def build_playlists(
         return False
 
     ok = True
-
-    # خروجی همه زبان‌ها
     all_path = output_dir / "playlist_all.m3u"
     ok = write_playlist(merged, all_path) and ok
 
-    # خروجی به تفکیک زبان
     if "language" in merged.columns:
         for lang, group in merged.groupby("language"):
             lang_str = str(lang).strip()
@@ -205,16 +214,17 @@ def build_playlists(
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="سازنده پلی‌لیست IPTV برای Nexa")
-    parser.add_argument("--feeds-url", required=True, help="آدرس feeds.csv")
-    parser.add_argument("--streams-url", required=True, help="آدرس streams.json")
-    parser.add_argument("--output-dir", default="output", help="پوشه خروجی")
-    parser.add_argument("--langs", default="", help="کدهای زبان جدا شده با کاما، مثلاً fas,eng")
+    # این‌ها دیگر required نیستند و از env یا پیش‌فرض می‌آیند
+    parser.add_argument("--feeds-url", default=DEFAULT_FEEDS_URL, help="آدرس feeds.csv")
+    parser.add_argument("--streams-url", default=DEFAULT_STREAMS_URL, help="آدرس streams.json")
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="پوشه خروجی")
+    parser.add_argument("--langs", default=DEFAULT_LANGS, help="کدهای زبان جدا شده با کاما")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES)
     parser.add_argument("--retry-delay", type=float, default=DEFAULT_RETRY_DELAY)
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default=os.environ.get("LOG_LEVEL", "INFO"),
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     return parser.parse_args(argv)
