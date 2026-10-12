@@ -6,8 +6,8 @@ on:
       - 'iptv_builder.py'
       - '.github/workflows/**'
   schedule:
-    - cron: '0 0 * * *'  # هر روز ساعت ۰۰:۰۰ UTC
-  workflow_dispatch:      # امکان اجرای دستی
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -39,41 +39,29 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run script
-        env:
-          FEEDS_URL: ${{ secrets.FEEDS_URL }}
-          STREAMS_URL: ${{ secrets.STREAMS_URL }}
-          LANGS: ${{ vars.LANGS }}
-          OUTPUT_DIR: "."
-          LOG_LEVEL: "INFO"
         run: python iptv_builder.py
 
-      - name: Verify output files
+      - name: Verify output
         run: |
-          for f in playlist.m3u playlist_hd.m3u playlist_sd.m3u; do
-            if [ -f "$f" ]; then
-              echo "OK: $f ($(wc -l < "$f") lines)"
-            else
-              echo "MISSING: $f"
-            fi
-          done
+          if [ -f playlist.m3u ]; then
+            echo "OK: playlist.m3u ($(wc -l < playlist.m3u) lines)"
+          else
+            echo "MISSING: playlist.m3u"
+            exit 1
+          fi
 
       - name: Commit and Push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # فقط فایل‌های موجود را اضافه کن
-          for f in playlist.m3u playlist_hd.m3u playlist_sd.m3u; do
-            [ -f "$f" ] && git add "$f"
-          done
+          git add playlist.m3u 2>/dev/null || true
 
           if git diff --cached --quiet; then
             echo "تغییری وجود ندارد؛ commit لازم نیست."
             exit 0
           fi
 
-          git commit -m "Auto-update playlists (All, HD, SD) [skip ci]"
-
-          # همگام‌سازی با ریموت قبل از push
+          git commit -m "Auto-update playlist [skip ci]"
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
           git push origin "HEAD:${GITHUB_REF_NAME}"
