@@ -4,9 +4,17 @@ on:
   push:
     paths:
       - 'iptv_builder.py'
+      - '.github/workflows/**'
   schedule:
-    - cron: '0 0 * * *'  # Runs every day at midnight
-  workflow_dispatch:      # Allows manual trigger button
+    - cron: '0 0 * * *'  # هر روز ساعت ۰۰:۰۰ UTC
+  workflow_dispatch:      # امکان اجرای دستی
+
+permissions:
+  contents: write
+
+concurrency:
+  group: iptv-playlist-update
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -14,25 +22,58 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.12'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run script
+        env:
+          FEEDS_URL: ${{ secrets.FEEDS_URL }}
+          STREAMS_URL: ${{ secrets.STREAMS_URL }}
+          LANGS: ${{ vars.LANGS }}
+          OUTPUT_DIR: "."
+          LOG_LEVEL: "INFO"
         run: python iptv_builder.py
+
+      - name: Verify output files
+        run: |
+          for f in playlist.m3u playlist_hd.m3u playlist_sd.m3u; do
+            if [ -f "$f" ]; then
+              echo "OK: $f ($(wc -l < "$f") lines)"
+            else
+              echo "MISSING: $f"
+            fi
+          done
 
       - name: Commit and Push changes
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add playlist.m3u playlist_hd.m3u playlist_sd.m3u
-          git commit -m "Auto-update playlists (All, HD, SD)" || exit 0
-          git push
-          
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # فقط فایل‌های موجود را اضافه کن
+          for f in playlist.m3u playlist_hd.m3u playlist_sd.m3u; do
+            [ -f "$f" ] && git add "$f"
+          done
+
+          if git diff --cached --quiet; then
+            echo "تغییری وجود ندارد؛ commit لازم نیست."
+            exit 0
+          fi
+
+          git commit -m "Auto-update playlists (All, HD, SD) [skip ci]"
+
+          # همگام‌سازی با ریموت قبل از push
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
