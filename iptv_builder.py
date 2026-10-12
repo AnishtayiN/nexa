@@ -19,17 +19,20 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 2.0
 
-# مقادیر پیش‌فرض — در صورت نیاز این‌ها را تغییر بده
-DEFAULT_FEEDS_URL = os.environ.get(
-    "FEEDS_URL",
-    "https://raw.githubusercontent.com/itsyebekhe/PSG/main/feeds.csv",
-)
-DEFAULT_STREAMS_URL = os.environ.get(
-    "STREAMS_URL",
-    "https://raw.githubusercontent.com/itsyebekhe/PSG/main/streams.json",
-)
-DEFAULT_OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
-DEFAULT_LANGS = os.environ.get("LANGS", "")  # مثلاً "fas,eng"
+# --- URLهای پیش‌فرض (اگر env خالی باشد از این‌ها استفاده می‌شود) ---
+FALLBACK_FEEDS_URL = "https://raw.githubusercontent.com/itsyebekhe/PSG/main/feeds.csv"
+FALLBACK_STREAMS_URL = "https://raw.githubusercontent.com/itsyebekhe/PSG/main/streams.json"
+
+def env_or_default(name: str, default: str) -> str:
+    """اگر متغیر محیطی وجود داشت و خالی نبود، همان را برگردان؛ وگرنه پیش‌فرض."""
+    val = os.environ.get(name, "").strip()
+    return val if val else default
+
+DEFAULT_FEEDS_URL = env_or_default("FEEDS_URL", FALLBACK_FEEDS_URL)
+DEFAULT_STREAMS_URL = env_or_default("STREAMS_URL", FALLBACK_STREAMS_URL)
+DEFAULT_OUTPUT_DIR = env_or_default("OUTPUT_DIR", "output")
+DEFAULT_LANGS = env_or_default("LANGS", "")
+DEFAULT_LOG_LEVEL = env_or_default("LOG_LEVEL", "INFO")
 
 def setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(
@@ -39,6 +42,8 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
 def fetch_url(url: str, timeout: int, retries: int, retry_delay: float) -> requests.Response:
+    if not url or not url.strip():
+        raise ValueError("URL خالی است. مقدار FEEDS_URL یا STREAMS_URL را تنظیم کن.")
     last_exc = None
     for attempt in range(1, retries + 1):
         try:
@@ -198,23 +203,13 @@ def build_playlists(
         return False
 
     ok = True
-    all_path = output_dir / "playlist_all.m3u"
+    all_path = output_dir / "playlist.m3u"
     ok = write_playlist(merged, all_path) and ok
-
-    if "language" in merged.columns:
-        for lang, group in merged.groupby("language"):
-            lang_str = str(lang).strip()
-            if not lang_str:
-                continue
-            safe_lang = "".join(c if c.isalnum() or c in "-_" else "_" for c in lang_str)
-            lang_path = output_dir / f"playlist_{safe_lang}.m3u"
-            ok = write_playlist(group, lang_path) and ok
 
     return ok
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="سازنده پلی‌لیست IPTV برای Nexa")
-    # این‌ها دیگر required نیستند و از env یا پیش‌فرض می‌آیند
     parser.add_argument("--feeds-url", default=DEFAULT_FEEDS_URL, help="آدرس feeds.csv")
     parser.add_argument("--streams-url", default=DEFAULT_STREAMS_URL, help="آدرس streams.json")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="پوشه خروجی")
@@ -224,7 +219,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--retry-delay", type=float, default=DEFAULT_RETRY_DELAY)
     parser.add_argument(
         "--log-level",
-        default=os.environ.get("LOG_LEVEL", "INFO"),
+        default=DEFAULT_LOG_LEVEL,
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     return parser.parse_args(argv)
@@ -232,6 +227,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     setup_logging(args.log_level)
+
+    LOG.info("FEEDS_URL=%s", args.feeds_url)
+    LOG.info("STREAMS_URL=%s", args.streams_url)
+    LOG.info("OUTPUT_DIR=%s", args.output_dir)
+    LOG.info("LANGS=%s", args.langs or "(همه)")
 
     langs = [x.strip() for x in args.langs.split(",") if x.strip()] if args.langs else None
 
