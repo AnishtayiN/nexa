@@ -1,217 +1,250 @@
 #!/usr/bin/env python3
-"""
-IPTV Playlist Generator for iptv-org database.
-Fetches feed metadata and stream URLs, merges them, and generates
-All, HD, and SD M3U playlists filtered by language.
-"""
-
-from __future__ import annotations
+# -*- coding: utf-8 -*-
 
 import argparse
-from contextlib import ExitStack
-from io import StringIO
+import io
 import logging
-from pathlib import Path
-import re
 import sys
+import time
+from pathlib import Path
+from typing import Iterable, Optional, Sequence
+
 import pandas as pd
 import requests
 
-# Default Configuration
-DEFAULT_FEEDS_URL = "https://raw.githubusercontent.com/iptv-org/database/master/data/feeds.csv"
-DEFAULT_STREAMS_URL = "https://iptv-org.github.io/api/streams.json"
-DEFAULT_LANG = "fas"          # Persian (ISO 639-3 code)
-DEFAULT_OUTPUT = "playlist.m3u"
-REQUEST_TIMEOUT = 15          # seconds
+LOG = logging.getLogger("nexa")
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+DEFAULT_TIMEOUT = 30
+DEFAULT_RETRIES = 3
+DEFAULT_RETRY_DELAY = 2.0
 
+def setup_logging(level: str = "INFO") -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
-def fetch_dataframe(url: str, file_type: str = "csv") -> pd.DataFrame:
-    """Download data using requests to ensure timeouts and proper headers."""
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; PlaylistGenerator/2.0)"}
-    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+def fetch_url(url: str, timeout: int, retries: int, retry_delay: float) -> requests.Response:
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            LOG.info("دریافت %s (تلاش %d/%d)", url, attempt, retries)
+            resp = requests.get(url, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as exc:
+            last_exc = exc
+            LOG.warning("خطا در دریافت %s: %s", url, exc)
+            if attempt < retries:
+                time.sleep(retry_delay * attempt)
+    raise RuntimeError(f"دریافت {url} پس از {retries} تلاش ناموفق بود: {last_exc}") from last_exc
 
-    if file_type == "csv":
-        return pd.read_csv(StringIO(response.text))
-    elif file_type == "json":
-        return pd.DataFrame(response.json())
-    else:
-        raise ValueError(f"Unsupported file type: {file_type}")
-
-
-def is_stream_hd(height: object, width: object, quality: str, url: str) -> bool:
-    """Determine whether a stream is HD (>= 720p) based on dimensions or tags."""
+def fetch_dataframe(
+    url: str,
+    data_type: str,
+    timeout: int,
+    retries: int,
+    retry_delay: float,
+) -> pd.DataFrame:
+    resp = fetch_url(url, timeout, retries, retry_delay)
     try:
-        h = float(height) if height != "" and height is not None else 0
-        w = float(width) if width != "" and width is not None else 0
-        if h >= 720 or w >= 1280:
-            return True
-    except (ValueError, TypeError):
-        pass
+        if data_type == "csv":
+            return pd.read_csv(io.StringIO(resp.text))
+        elif data_type == "json":
+            data = resp.json()
+            if isinstance(data, dict):
+                if "data" in data and isinstance(data["data"], list):
+                    data = data["data"]
+                else:
+                    data = [data]
+            return pd.DataFrame(data)
+        else:
+            raise ValueError(f"نوع داده ناشناخته: {data_type}")
+    except Exception as exc:
+        raise RuntimeError(f"تبدیل پاسخ {url} به DataFrame ناموفق بود: {exc}") from exc
 
-    q_lower = quality.lower()
-    u_lower = url.lower()
-    return any(k in q_lower for k in ("hd", "1080", "720")) or any(k in u_lower for k in ("hd", "1080", "720"))
+def normalize_channel_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "channel" not in df.columns:
+        raise KeyError("ستون 'channel' در DataFrame وجود ندارد.")
+    df = df.copy()
+    df["channel"] = df["channel"].astype(str).str.strip()
+    return df
 
+def filter_languages(df: pd.DataFrame, langs: Optional[Sequence[str]]) -> pd.DataFrame:
+    if not langs:
+        return df
+    if "language" not in df.columns:
+        LOG.warning("ستون 'language' وجود ندارد؛ فیلتر زبان اعمال نمی‌شود.")
+        return df
+    lang_set = {l.strip().lower() for l in langs if l.strip()}
+    mask = df["language"].astype(str).str.lower().isin(lang_set)
+    return df[mask].copy()
 
-def build_playlist(
-    lang: str = DEFAULT_LANG,
-    output_file: str = DEFAULT_OUTPUT,
-    feeds_url: str = DEFAULT_FEEDS_URL,
-    streams_url: str = DEFAULT_STREAMS_URL,
-    include_offline: bool = False,
-) -> None:
-    logging.info("Starting playlist generation...")
+def get_first_existing(row: pd.Series, candidates: Iterable[str], default: str = "") -> str:
+    for col in candidates:
+        if col in row.index:
+            val = row[col]
+            if pd.notna(val) and str(val).strip():
+                return str(val).strip()
+    return default
 
-    # 1. Download Feeds Metadata
-    logging.info(f"Downloading feeds metadata from: {feeds_url}")
-    try:
-        df_feeds = fetch_dataframe(feeds_url, file_type="csv")
-    except Exception as e:
-        logging.error(f"Failed to retrieve feeds CSV: {e}")
-        sys.exit(1)
+def build_m3u_lines(df: pd.DataFrame) -> list[str]:
+    lines = ["#EXTM3U"]
+    for _, row in df.iterrows():
+        name = get_first_existing(
+            row,
+            ["name", "channel", "title", "name_feed", "name_stream", "channel_feed", "channel_stream"],
+            "Unknown",
+        )
+        tvg_id = get_first_existing(
+            row,
+            ["tvg_id", "tvg-id", "id", "tvg_id_feed", "tvg_id_stream"],
+            "",
+        )
+        tvg_logo = get_first_existing(
+            row,
+            ["tvg_logo", "tvg-logo", "logo", "tvg_logo_feed", "tvg_logo_stream"],
+            "",
+        )
+        group = get_first_existing(
+            row,
+            ["group_title", "group-title", "group", "category", "group_feed", "group_stream"],
+            "",
+        )
+        url = get_first_existing(
+            row,
+            ["url_stream", "stream_url", "url", "link", "stream", "url_feed", "url_stream"],
+            "",
+        )
+        if not url:
+            LOG.warning("ردیف بدون URL رد شد: %s", name)
+            continue
 
-    if "languages" not in df_feeds.columns:
-        logging.error("Column 'languages' was not found in the feeds dataset.")
-        sys.exit(1)
+        attrs = []
+        if tvg_id:
+            attrs.append(f'tvg-id="{tvg_id}"')
+        if tvg_logo:
+            attrs.append(f'tvg-logo="{tvg_logo}"')
+        if group:
+            attrs.append(f'group-title="{group}"')
+        attr_str = " " + " ".join(attrs) if attrs else ""
 
-    # 2. Filter by Language (Supports multi-languages like 'eng;fas')
-    logging.info(f"Filtering feeds for language: '{lang}'...")
-    lang_pattern = rf"\b{re.escape(lang)}\b"
-    df_filtered = df_feeds[
-        df_feeds["languages"].astype(str).str.contains(lang_pattern, regex=True, na=False)
-    ].copy()
+        lines.append(f"#EXTINF:-1{attr_str},{name}")
+        lines.append(url)
 
-    # Ensure consistent channel key
-    if "channel" not in df_filtered.columns and "id" in df_filtered.columns:
-        df_filtered.rename(columns={"id": "channel"}, inplace=True)
+    return lines
 
-    if df_filtered.empty:
-        logging.warning(f"No channels found matching language code '{lang}'.")
-        return
+def validate_m3u(path: Path) -> bool:
+    if not path.exists():
+        LOG.error("فایل خروجی ساخته نشد: %s", path)
+        return False
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if "#EXTM3U" not in text:
+        LOG.error("فایل %s هدر #EXTM3U ندارد.", path)
+        return False
+    if "#EXTINF" not in text:
+        LOG.error("فایل %s هیچ کانال معتبری ندارد.", path)
+        return False
+    return True
 
-    logging.info(f"Found {len(df_filtered)} matching feed(s).")
+def write_playlist(df: pd.DataFrame, path: Path) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = build_m3u_lines(df)
+    if len(lines) <= 1:
+        LOG.error("هیچ کانال معتبری برای نوشتن در %s وجود ندارد.", path)
+        return False
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    LOG.info("نوشته شد: %s (%d خط)", path, len(lines))
+    return validate_m3u(path)
 
-    # 3. Download Streams Data
-    logging.info(f"Downloading streams list from: {streams_url}")
-    try:
-        df_streams = fetch_dataframe(streams_url, file_type="json")
-    except Exception as e:
-        logging.error(f"Failed to retrieve streams JSON: {e}")
-        sys.exit(1)
+def build_playlists(
+    feeds_df: pd.DataFrame,
+    streams_df: pd.DataFrame,
+    langs: Optional[Sequence[str]],
+    output_dir: Path,
+) -> bool:
+    feeds_df = normalize_channel_column(feeds_df)
+    streams_df = normalize_channel_column(streams_df)
 
-    # Filter out offline streams if requested
-    if not include_offline and "status" in df_streams.columns:
-        df_streams = df_streams[df_streams["status"] != "offline"]
+    feeds_df = filter_languages(feeds_df, langs)
 
-    # 4. Merge Feeds and Streams
-    logging.info("Merging feeds with streams...")
+    # جلوگیری از تداخل ستون language در ادغام
+    if "language" in feeds_df.columns and "language" in streams_df.columns:
+        streams_df = streams_df.drop(columns=["language"])
+
     merged = pd.merge(
-        df_streams,
-        df_filtered,
+        feeds_df,
+        streams_df,
         on="channel",
         how="inner",
-        suffixes=("_stream", "_feed"),
-    ).fillna("")
+        suffixes=("_feed", "_stream"),
+    )
 
     if merged.empty:
-        logging.warning("No active streams matched the filtered feeds.")
-        return
+        LOG.error("پس از ادغام، هیچ کانالی پیدا نشد. نوع ستون channel یا فیلتر زبان را بررسی کنید.")
+        return False
 
-    logging.info(f"Total matched streams: {len(merged)}")
+    ok = True
 
-    # 5. Determine Output Paths (All, HD, SD)
-    base_path = Path(output_file)
-    path_all = base_path
-    path_hd = base_path.with_name(f"{base_path.stem}_hd{base_path.suffix}")
-    path_sd = base_path.with_name(f"{base_path.stem}_sd{base_path.suffix}")
+    # خروجی همه زبان‌ها
+    all_path = output_dir / "playlist_all.m3u"
+    ok = write_playlist(merged, all_path) and ok
 
-    logging.info(f"Writing M3U playlists:\n - All: {path_all}\n - HD:  {path_hd}\n - SD:  {path_sd}")
-
-    # Use ExitStack to cleanly manage all 3 file streams simultaneously
-    with ExitStack() as stack:
-        f_all = stack.enter_context(path_all.open("w", encoding="utf-8"))
-        f_hd = stack.enter_context(path_hd.open("w", encoding="utf-8"))
-        f_sd = stack.enter_context(path_sd.open("w", encoding="utf-8"))
-
-        # Write M3U headers
-        f_all.write("#EXTM3U\n")
-        f_hd.write("#EXTM3U\n")
-        f_sd.write("#EXTM3U\n")
-
-        hd_count = 0
-        sd_count = 0
-
-        for row in merged.itertuples(index=False):
-            url = str(getattr(row, "url", "")).strip()
-            if not url:
+    # خروجی به تفکیک زبان
+    if "language" in merged.columns:
+        for lang, group in merged.groupby("language"):
+            lang_str = str(lang).strip()
+            if not lang_str:
                 continue
+            safe_lang = "".join(c if c.isalnum() or c in "-_" else "_" for c in lang_str)
+            lang_path = output_dir / f"playlist_{safe_lang}.m3u"
+            ok = write_playlist(group, lang_path) and ok
 
-            channel_id = str(getattr(row, "channel", "")).strip()
-            name = str(getattr(row, "name_feed", "")).strip() or channel_id
-            raw_area = str(getattr(row, "broadcast_area", ""))
-            group = raw_area.replace("c/", "").replace(";", ", ") if raw_area else "General"
-            language = str(getattr(row, "languages", ""))
-            quality = str(getattr(row, "format", ""))
-            user_agent = str(getattr(row, "user_agent", "")).strip()
-            referrer = str(getattr(row, "referrer", "")).strip()
+    return ok
 
-            # Build EXTINF line
-            extinf = (
-                f'#EXTINF:-1 tvg-id="{channel_id}" '
-                f'tvg-name="{name}" '
-                f'group-title="{group}" '
-                f'tvg-language="{language}" '
-                f'tvg-quality="{quality}",{channel_id}\n'
-            )
-
-            # Assemble entry block
-            entry = extinf
-            if user_agent:
-                entry += f"#EXTVLCOPT:http-user-agent={user_agent}\n"
-            if referrer:
-                entry += f"#EXTVLCOPT:http-referrer={referrer}\n"
-            entry += f"{url}\n\n"
-
-            # Always write to main playlist
-            f_all.write(entry)
-
-            # Quality categorization
-            height = getattr(row, "height", 0)
-            width = getattr(row, "width", 0)
-            if is_stream_hd(height, width, quality, url):
-                f_hd.write(entry)
-                hd_count += 1
-            else:
-                f_sd.write(entry)
-                sd_count += 1
-
-    logging.info(f"✅ Success! Generated:")
-    logging.info(f"   - All ({len(merged)} streams): {path_all.name}")
-    logging.info(f"   - HD  ({hd_count} streams): {path_hd.name}")
-    logging.info(f"   - SD  ({sd_count} streams): {path_sd.name}")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate M3U playlists from iptv-org.")
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="سازنده پلی‌لیست IPTV برای Nexa")
+    parser.add_argument("--feeds-url", required=True, help="آدرس feeds.csv")
+    parser.add_argument("--streams-url", required=True, help="آدرس streams.json")
+    parser.add_argument("--output-dir", default="output", help="پوشه خروجی")
+    parser.add_argument("--langs", default="", help="کدهای زبان جدا شده با کاما، مثلاً fas,eng")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES)
+    parser.add_argument("--retry-delay", type=float, default=DEFAULT_RETRY_DELAY)
     parser.add_argument(
-        "-l", "--lang", default=DEFAULT_LANG, help=f"ISO 639-3 language code (default: {DEFAULT_LANG})"
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
-    parser.add_argument(
-        "-o", "--output", default=DEFAULT_OUTPUT, help=f"Base output file path (default: {DEFAULT_OUTPUT})"
-    )
-    parser.add_argument(
-        "--include-offline", action="store_true", help="Include streams marked as offline"
-    )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
+    setup_logging(args.log_level)
+
+    langs = [x.strip() for x in args.langs.split(",") if x.strip()] if args.langs else None
+
+    try:
+        feeds_df = fetch_dataframe(
+            args.feeds_url, "csv", args.timeout, args.retries, args.retry_delay
+        )
+        streams_df = fetch_dataframe(
+            args.streams_url, "json", args.timeout, args.retries, args.retry_delay
+        )
+    except Exception as exc:
+        LOG.error("خطا در دریافت داده‌ها: %s", exc)
+        return 1
+
+    output_dir = Path(args.output_dir)
+    success = build_playlists(feeds_df, streams_df, langs, output_dir)
+
+    if not success:
+        LOG.error("ساخت پلی‌لیست با خطا مواجه شد.")
+        return 1
+
+    LOG.info("تمام پلی‌لیست‌ها با موفقیت ساخته شدند.")
+    return 0
 
 if __name__ == "__main__":
-    args = parse_args()
-    build_playlist(
-        lang=args.lang,
-        output_file=args.output,
-        include_offline=args.include_offline,
-    )
+    sys.exit(main())
