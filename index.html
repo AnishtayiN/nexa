@@ -260,7 +260,7 @@
       border: 1px solid var(--border);
       z-index: 10;
       pointer-events: none;
-      max-width: 85%;
+      max-width: min(85%, calc(100% - 360px));
     }
 
     .stream-overlay span {
@@ -268,6 +268,52 @@
       overflow: hidden;
       text-overflow: ellipsis;
       font-size: 0.8rem;
+    }
+
+    .quality-control {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 11;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: calc(100% - 24px);
+      padding: 5px 8px;
+      color: var(--text);
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+
+    .quality-control label {
+      flex-shrink: 0;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+    }
+
+    #quality-selector {
+      width: 132px;
+      max-width: 38vw;
+      padding: 5px 7px;
+      font-size: 0.72rem;
+    }
+
+    #quality-selector:disabled {
+      opacity: 0.78;
+      cursor: not-allowed;
+    }
+
+    .quality-hint {
+      max-width: 140px;
+      overflow: hidden;
+      color: var(--text-muted);
+      font-size: 0.65rem;
+      line-height: 1.3;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .status-dot {
@@ -505,6 +551,18 @@
         border-bottom: 2px solid var(--border);
       }
 
+      .quality-control {
+        top: 8px;
+        left: 8px;
+      }
+
+      .stream-overlay {
+        top: 52px;
+        right: 8px;
+        left: 8px;
+        max-width: none;
+      }
+
       .sidebar {
         flex: 1;
         min-height: 0;
@@ -530,6 +588,15 @@
       }
       #source-selector {
         max-width: 130px;
+      }
+
+      #quality-selector {
+        width: 118px;
+        max-width: 42vw;
+      }
+
+      .quality-hint {
+        display: none;
       }
     }
   </style>
@@ -575,7 +642,15 @@
         <span id="now-playing-title">کانالی انتخاب نشده</span>
       </div>
 
-      <!-- Player Auto-Retry / Error Overlay -->
+      <div class="quality-control">
+        <label for="quality-selector">کیفیت</label>
+        <select id="quality-selector" class="input-field" disabled aria-describedby="quality-hint">
+          <option value="auto">خودکار</option>
+        </select>
+        <span id="quality-hint" class="quality-hint" role="status" aria-live="polite">در حال آماده‌سازی پخش‌کننده…</span>
+      </div>
+
+      <!-- Player Auto-Retry / Manual retry -->
       <div id="player-error-overlay" class="player-error-overlay">
         <!-- 1. Auto Retry View -->
         <div id="auto-retry-container" style="display: none; flex-direction: column; align-items: center; gap: 12px;">
@@ -635,6 +710,7 @@
     let currentChannelIdx = -1;
     let activeTab = 'all';
     let currentSourceUrl = '';
+    let currentPlaybackEntry = null;
     let hls = null;
     let toastTimer = null;
 
@@ -659,6 +735,8 @@
     const groupFilter = document.getElementById('group-filter');
     const nowPlayingTitle = document.getElementById('now-playing-title');
     const statusIndicator = document.getElementById('status-indicator');
+    const qualitySelector = document.getElementById('quality-selector');
+    const qualityHint = document.getElementById('quality-hint');
     const sourceSelector = document.getElementById('source-selector');
     const urlLoader = document.getElementById('url-loader');
     const toast = document.getElementById('toast');
@@ -679,6 +757,173 @@
     function setStatus(state) {
       statusIndicator.className = `status-dot ${state}`;
     }
+
+    function resetQualityControl(message, label = 'خودکار') {
+      qualitySelector.replaceChildren();
+      const option = document.createElement('option');
+      option.value = 'auto';
+      option.textContent = label;
+      qualitySelector.appendChild(option);
+      qualitySelector.value = 'auto';
+      qualitySelector.disabled = true;
+      qualitySelector.title = message;
+      qualityHint.textContent = message;
+    }
+
+    function formatLevel(level) {
+      const height = Number(level && level.height) || 0;
+      const bitrate = Number(level && level.bitrate) || 0;
+      const resolution = height ? `${height}p` : 'کیفیت نامشخص';
+      let rate = '';
+      if (bitrate >= 1000000) rate = `${(bitrate / 1000000).toFixed(1)} Mbps`;
+      else if (bitrate > 0) rate = `${Math.round(bitrate / 1000)} kbps`;
+      return rate ? `${resolution} · ${rate}` : resolution;
+    }
+
+    function sameChannel(first, second) {
+      if (!first || !second) return false;
+      if (first.id && second.id) return first.id.toLowerCase() === second.id.toLowerCase();
+      const firstName = String(first.name || '').trim().toLowerCase();
+      const secondName = String(second.name || '').trim().toLowerCase();
+      return Boolean(firstName && firstName !== 'شبکه بدون نام' && firstName === secondName);
+    }
+
+    function getAlternateSources() {
+      const active = currentPlaybackEntry || channels[currentChannelIdx];
+      if (!active) return [];
+      return channels
+        .map((entry, index) => ({ entry, index }))
+        .filter(item => sameChannel(item.entry, active) && item.entry.url !== active.url)
+        .sort((a, b) => sourceQualityHeight(a.entry) - sourceQualityHeight(b.entry));
+    }
+
+    function sourceQualityHeight(entry) {
+      const match = String(entry.quality || '').match(/(?:^|\D)(\d{3,4})\s*[pi]?(?:\D|$)/i);
+      return match ? Number(match[1]) : (entry.isHD ? 720 : 0);
+    }
+
+    function sourceQualityLabel(entry) {
+      const quality = entry.quality && entry.quality !== 'Unknown'
+        ? entry.quality
+        : (entry.isHD ? 'HD' : 'کیفیت نامشخص');
+      let host = '';
+      try { host = new URL(entry.url).hostname.replace(/^www\./i, ''); } catch (_) {}
+      return host ? `${quality} · ${host}` : `${quality} · لینک جایگزین`;
+    }
+
+    function addAlternateSourceOptions(alternatives) {
+      if (!alternatives.length) return;
+      const group = document.createElement('optgroup');
+      group.label = 'لینک‌های جایگزین همین شبکه';
+      alternatives.forEach(({ entry, index }) => {
+        const option = document.createElement('option');
+        option.value = `source:${index}`;
+        option.textContent = sourceQualityLabel(entry);
+        group.appendChild(option);
+      });
+      qualitySelector.appendChild(group);
+    }
+
+    function updateQualityOptions(instance) {
+      if (hls !== instance) return;
+      const levels = Array.isArray(instance.levels) ? instance.levels : [];
+      const alternatives = getAlternateSources();
+      const active = currentPlaybackEntry || channels[currentChannelIdx];
+      const previousValue = qualitySelector.value;
+
+      qualitySelector.replaceChildren();
+      const currentOption = document.createElement('option');
+      currentOption.value = 'auto';
+      currentOption.textContent = levels.length > 1
+        ? 'خودکار'
+        : `فعلی · ${levels.length === 1 ? formatLevel(levels[0]) : (active ? sourceQualityLabel(active) : 'ثابت')}`;
+      qualitySelector.appendChild(currentOption);
+
+      if (levels.length > 1) {
+        const group = document.createElement('optgroup');
+        group.label = 'کیفیت‌های همین استریم';
+        const sortedLevels = levels.map((level, index) => ({ level, index })).sort((a, b) => {
+          const heightDifference = (Number(a.level.height) || 0) - (Number(b.level.height) || 0);
+          if (heightDifference !== 0) return heightDifference;
+          return (Number(a.level.bitrate) || 0) - (Number(b.level.bitrate) || 0);
+        });
+        sortedLevels.forEach(({ level, index }) => {
+          const option = document.createElement('option');
+          option.value = `level:${index}`;
+          option.textContent = formatLevel(level);
+          group.appendChild(option);
+        });
+        qualitySelector.appendChild(group);
+      }
+      addAlternateSourceOptions(alternatives);
+
+      qualitySelector.disabled = levels.length <= 1 && alternatives.length === 0;
+      const optionExists = [...qualitySelector.options].some(option => option.value === previousValue);
+      qualitySelector.value = optionExists ? previousValue : 'auto';
+      if (levels.length > 1) {
+        qualityHint.textContent = 'برای کاهش مصرف، رزولوشن پایین‌تر را انتخاب کن.';
+      } else if (alternatives.length) {
+        qualityHint.textContent = 'این لینک کیفیت ثابت دارد؛ می‌توانی منبع جایگزین را امتحان کنی.';
+      } else {
+        const label = levels.length === 1 ? formatLevel(levels[0]) : (active ? sourceQualityLabel(active) : 'ثابت');
+        qualityHint.textContent = `این استریم فقط یک کیفیت (${label}) دارد؛ تغییر دستی ممکن نیست.`;
+      }
+      qualitySelector.title = qualityHint.textContent;
+    }
+
+    function updateNativeQualityOptions() {
+      const alternatives = getAlternateSources();
+      const active = currentPlaybackEntry || channels[currentChannelIdx];
+      qualitySelector.replaceChildren();
+      const option = document.createElement('option');
+      option.value = 'auto';
+      option.textContent = `خودکار · ${active ? sourceQualityLabel(active) : 'مرورگر'}`;
+      qualitySelector.appendChild(option);
+      addAlternateSourceOptions(alternatives);
+      qualitySelector.disabled = alternatives.length === 0;
+      qualityHint.textContent = alternatives.length
+        ? 'مرورگر کیفیت را خودکار تنظیم می‌کند؛ لینک جایگزین هم در دسترس است.'
+        : 'مرورگر کیفیت را خودکار تنظیم می‌کند؛ انتخاب دستی پشتیبانی نمی‌شود.';
+      qualitySelector.title = qualityHint.textContent;
+    }
+
+    function updateCurrentQuality(instance, data) {
+      if (hls !== instance || !data || !Number.isInteger(Number(data.level))) return;
+      const level = instance.levels && instance.levels[Number(data.level)];
+      if (!level) return;
+      const mode = qualitySelector.value === 'auto' ? 'خودکار' : 'دستی';
+      qualityHint.textContent = `${mode}: اکنون ${formatLevel(level)}`;
+    }
+
+    qualitySelector.addEventListener('change', () => {
+      const value = qualitySelector.value;
+      if (value.startsWith('source:')) {
+        const sourceIndex = Number(value.slice('source:'.length));
+        const alternative = channels[sourceIndex];
+        const active = currentPlaybackEntry || channels[currentChannelIdx];
+        if (Number.isInteger(sourceIndex) && alternative && sameChannel(alternative, active)) {
+          playChannel(currentChannelIdx, true, alternative);
+        }
+        return;
+      }
+      if (qualitySelector.disabled) return;
+      if (value === 'auto') {
+        if (hls) {
+          hls.autoLevelCapping = -1;
+          hls.currentLevel = -1;
+          qualityHint.textContent = 'کیفیت تطبیقی خودکار است؛ برای کاهش مصرف، رزولوشن پایین‌تری انتخاب کن.';
+        }
+        return;
+      }
+      if (!hls) return;
+      const match = value.match(/^level:(\d+)$/);
+      if (!match) return;
+      const levelIndex = Number(match[1]);
+      if (!Number.isInteger(levelIndex) || levelIndex < 0 || levelIndex >= hls.levels.length) return;
+      hls.autoLevelCapping = -1;
+      hls.currentLevel = levelIndex;
+      qualityHint.textContent = `کیفیت دستی: ${formatLevel(hls.levels[levelIndex])}`;
+    });
 
     function resolveHttpUrl(value, baseUrl = '') {
       const raw = String(value || '').trim();
@@ -967,15 +1212,17 @@
       }
       video.onerror = null;
       video.onloadedmetadata = null;
+      resetQualityControl('برای کانال فعلی کیفیتی بارگذاری نشده است.');
       video.pause();
       video.removeAttribute('src');
       video.load();
     }
 
-    function playChannel(index, updateHistory = false) {
+    function playChannel(index, updateHistory = false, playbackEntry = null) {
       if (index < 0 || index >= channels.length) return;
       currentChannelIdx = index;
-      const channel = channels[index];
+      const channel = playbackEntry || channels[index];
+      currentPlaybackEntry = channel;
       hideOverlays();
       stopCurrentStream();
       nowPlayingTitle.textContent = channel.name;
@@ -985,6 +1232,7 @@
 
       const HlsPlayer = window.Hls;
       if (HlsPlayer && typeof HlsPlayer.isSupported === 'function' && HlsPlayer.isSupported()) {
+        resetQualityControl('در حال دریافت کیفیت‌های موجود…');
         const instance = new HlsPlayer({
           enableWorker: true,
           lowLatencyMode: true,
@@ -994,8 +1242,16 @@
         });
         hls = instance;
         instance.on(HlsPlayer.Events.MANIFEST_PARSED, () => {
-          if (hls === instance) video.play().catch(() => {});
+          if (hls !== instance) return;
+          updateQualityOptions(instance);
+          video.play().catch(() => {});
         });
+        if (HlsPlayer.Events.LEVELS_UPDATED) {
+          instance.on(HlsPlayer.Events.LEVELS_UPDATED, () => updateQualityOptions(instance));
+        }
+        if (HlsPlayer.Events.LEVEL_SWITCHED) {
+          instance.on(HlsPlayer.Events.LEVEL_SWITCHED, (_, data) => updateCurrentQuality(instance, data));
+        }
         instance.on(HlsPlayer.Events.ERROR, (_, data) => {
           if (!data.fatal || hls !== instance) return;
           if (!isAutoRetrying) {
@@ -1010,12 +1266,14 @@
         instance.loadSource(channel.url);
         instance.attachMedia(video);
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        updateNativeQualityOptions();
         video.src = channel.url;
         video.onloadedmetadata = () => video.play().catch(() => {});
         video.onerror = () => {
           if (!isAutoRetrying) startAutoRetryCountdown();
         };
       } else {
+        resetQualityControl('این مرورگر برای این استریم گزینهٔ کیفیت ندارد.', 'در دسترس نیست');
         showManualRetry('این مرورگر پخش HLS را پشتیبانی نمی‌کند. مرورگر دیگری را امتحان کنید.');
       }
     }
@@ -1025,7 +1283,7 @@
       setStatus('online');
     });
     retryBtn.addEventListener('click', () => {
-      if (currentChannelIdx >= 0) playChannel(currentChannelIdx);
+      if (currentChannelIdx >= 0) playChannel(currentChannelIdx, false, currentPlaybackEntry);
     });
 
     async function loadFromUrl(url, targetChannelName = null) {
@@ -1037,6 +1295,7 @@
       currentSourceUrl = url;
       channels = [];
       currentChannelIdx = -1;
+      currentPlaybackEntry = null;
       stopCurrentStream();
       hideOverlays();
       populateGroups();
@@ -1094,6 +1353,7 @@
       const file = event.target.files && event.target.files[0];
       if (!file) return;
       currentSourceUrl = '';
+      currentPlaybackEntry = null;
       const reader = new FileReader();
       reader.onload = loadEvent => {
         channels = parseM3U(loadEvent.target.result);
