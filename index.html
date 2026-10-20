@@ -301,9 +301,28 @@
       font-size: 0.72rem;
     }
 
-    #quality-selector:disabled {
-      opacity: 0.78;
-      cursor: not-allowed;
+    #quality-selector:disabled,
+    #quality-selector[hidden] {
+      display: none;
+    }
+
+    .quality-fixed {
+      display: inline-flex;
+      align-items: center;
+      max-width: 118px;
+      overflow: hidden;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(10, 15, 29, 0.85);
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .quality-fixed[hidden] {
+      display: none;
     }
 
     .quality-hint {
@@ -557,8 +576,9 @@
       }
 
       .stream-overlay {
-        top: 52px;
+        top: auto;
         right: 8px;
+        bottom: 8px;
         left: 8px;
         max-width: none;
       }
@@ -597,6 +617,16 @@
 
       .quality-hint {
         display: none;
+      }
+
+      .quality-control.is-fixed .quality-hint {
+        display: block;
+        max-width: 118px;
+        white-space: normal;
+      }
+
+      .quality-fixed {
+        max-width: 102px;
       }
     }
   </style>
@@ -644,9 +674,10 @@
 
       <div class="quality-control">
         <label for="quality-selector">کیفیت</label>
-        <select id="quality-selector" class="input-field" disabled aria-describedby="quality-hint">
+        <select id="quality-selector" class="input-field" disabled hidden aria-describedby="quality-hint">
           <option value="auto">خودکار</option>
         </select>
+        <span id="quality-fixed" class="quality-fixed" role="note">در حال آماده‌سازی</span>
         <span id="quality-hint" class="quality-hint" role="status" aria-live="polite">در حال آماده‌سازی پخش‌کننده…</span>
       </div>
 
@@ -736,7 +767,9 @@
     const nowPlayingTitle = document.getElementById('now-playing-title');
     const statusIndicator = document.getElementById('status-indicator');
     const qualitySelector = document.getElementById('quality-selector');
+    const qualityFixed = document.getElementById('quality-fixed');
     const qualityHint = document.getElementById('quality-hint');
+    const qualityControl = document.querySelector('.quality-control');
     const sourceSelector = document.getElementById('source-selector');
     const urlLoader = document.getElementById('url-loader');
     const toast = document.getElementById('toast');
@@ -766,6 +799,31 @@
       qualitySelector.appendChild(option);
       qualitySelector.value = 'auto';
       qualitySelector.disabled = true;
+      qualitySelector.hidden = true;
+      qualityFixed.hidden = false;
+      qualityFixed.textContent = label;
+      qualityFixed.title = message;
+      qualityControl.classList.add('is-fixed');
+      qualitySelector.title = message;
+      qualityHint.textContent = message;
+    }
+
+    function showQualityMenu(message) {
+      qualitySelector.disabled = false;
+      qualitySelector.hidden = false;
+      qualityFixed.hidden = true;
+      qualityControl.classList.remove('is-fixed');
+      qualitySelector.title = message;
+      qualityHint.textContent = message;
+    }
+
+    function showFixedQuality(label, message) {
+      qualitySelector.disabled = true;
+      qualitySelector.hidden = true;
+      qualityFixed.hidden = false;
+      qualityFixed.textContent = label;
+      qualityFixed.title = message;
+      qualityControl.classList.add('is-fixed');
       qualitySelector.title = message;
       qualityHint.textContent = message;
     }
@@ -778,6 +836,14 @@
       if (bitrate >= 1000000) rate = `${(bitrate / 1000000).toFixed(1)} Mbps`;
       else if (bitrate > 0) rate = `${Math.round(bitrate / 1000)} kbps`;
       return rate ? `${resolution} · ${rate}` : resolution;
+    }
+
+    function currentQualityLabel(level, active) {
+      if (Number(level && level.height) > 0) return formatLevel(level);
+      const sourceQuality = String(active && active.quality || '').trim();
+      if (sourceQuality && sourceQuality !== 'Unknown') return sourceQuality;
+      if (Number(level && level.bitrate) > 0) return formatLevel(level);
+      return 'نامشخص';
     }
 
     function sameChannel(first, second) {
@@ -836,7 +902,7 @@
       currentOption.value = 'auto';
       currentOption.textContent = levels.length > 1
         ? 'خودکار'
-        : `فعلی · ${levels.length === 1 ? formatLevel(levels[0]) : (active ? sourceQualityLabel(active) : 'ثابت')}`;
+        : `فعلی · ${currentQualityLabel(levels[0], active)}`;
       qualitySelector.appendChild(currentOption);
 
       if (levels.length > 1) {
@@ -857,18 +923,20 @@
       }
       addAlternateSourceOptions(alternatives);
 
-      qualitySelector.disabled = levels.length <= 1 && alternatives.length === 0;
+      const canChange = levels.length > 1 || alternatives.length > 0;
+      if (!canChange) {
+        const fixedLabel = currentQualityLabel(levels[0], active);
+        const message = `فقط ${fixedLabel} موجود است؛ کیفیت دیگری برای انتخاب نیست.`;
+        showFixedQuality(`ثابت · ${fixedLabel}`, message);
+        return;
+      }
+
       const optionExists = [...qualitySelector.options].some(option => option.value === previousValue);
       qualitySelector.value = optionExists ? previousValue : 'auto';
-      if (levels.length > 1) {
-        qualityHint.textContent = 'برای کاهش مصرف، رزولوشن پایین‌تر را انتخاب کن.';
-      } else if (alternatives.length) {
-        qualityHint.textContent = 'این لینک کیفیت ثابت دارد؛ می‌توانی منبع جایگزین را امتحان کنی.';
-      } else {
-        const label = levels.length === 1 ? formatLevel(levels[0]) : (active ? sourceQualityLabel(active) : 'ثابت');
-        qualityHint.textContent = `این استریم فقط یک کیفیت (${label}) دارد؛ تغییر دستی ممکن نیست.`;
-      }
-      qualitySelector.title = qualityHint.textContent;
+      const message = levels.length > 1
+        ? 'برای کاهش مصرف، رزولوشن پایین‌تر را انتخاب کن.'
+        : 'این لینک کیفیت ثابت دارد؛ برای تغییر، یکی از لینک‌های جایگزین همین شبکه را انتخاب کن.';
+      showQualityMenu(message);
     }
 
     function updateNativeQualityOptions() {
@@ -877,14 +945,14 @@
       qualitySelector.replaceChildren();
       const option = document.createElement('option');
       option.value = 'auto';
-      option.textContent = `خودکار · ${active ? sourceQualityLabel(active) : 'مرورگر'}`;
+      option.textContent = `خودکار · ${active ? currentQualityLabel(null, active) : 'مرورگر'}`;
       qualitySelector.appendChild(option);
       addAlternateSourceOptions(alternatives);
-      qualitySelector.disabled = alternatives.length === 0;
-      qualityHint.textContent = alternatives.length
-        ? 'مرورگر کیفیت را خودکار تنظیم می‌کند؛ لینک جایگزین هم در دسترس است.'
-        : 'مرورگر کیفیت را خودکار تنظیم می‌کند؛ انتخاب دستی پشتیبانی نمی‌شود.';
-      qualitySelector.title = qualityHint.textContent;
+      if (alternatives.length) {
+        showQualityMenu('مرورگر کیفیت داخلی را خودکار تنظیم می‌کند؛ لینک جایگزین همین شبکه را هم می‌توانی انتخاب کنی.');
+      } else {
+        showFixedQuality('خودکار مرورگر', 'این مرورگر کیفیت را خودکار تنظیم می‌کند؛ تغییر دستی این استریم در دسترس نیست.');
+      }
     }
 
     function updateCurrentQuality(instance, data) {
