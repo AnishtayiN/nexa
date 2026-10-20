@@ -2,7 +2,9 @@
 <html lang="fa" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#090d16">
+  <meta name="description" content="پخش زندهٔ شبکه‌های عمومی IPTV فارسی و کردی با پلی‌لیست‌های رایگان M3U">
   <title>نکسا | NEXA</title>
 
   <!-- Google Fonts: Vazirmatn -->
@@ -11,7 +13,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
   <!-- Hls.js -->
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
 
   <style>
     :root {
@@ -380,6 +382,11 @@
       background: var(--bg-card-hover);
     }
 
+    .channel-item:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
     .channel-item.active {
       background: var(--bg-card-hover);
       border: 1px solid var(--accent);
@@ -540,10 +547,13 @@
     </div>
 
     <div class="header-controls">
-      <select id="source-selector" class="input-field">
-        <option value="playlist.m3u">منبع اصلی</option>
-        <option value="playlist_hd.m3u">منبع اصلی HD</option>
-        <option value="playlist_sd.m3u">منبع اصلی SD</option>
+      <select id="source-selector" class="input-field" aria-label="انتخاب پلی‌لیست">
+        <option value="playlist_extended.m3u">گسترده: فارسی + کردی</option>
+        <option value="playlist_extended_hd.m3u">گسترده HD</option>
+        <option value="playlist_extended_sd.m3u">گسترده SD</option>
+        <option value="playlist.m3u">فقط فارسی</option>
+        <option value="playlist_hd.m3u">فقط فارسی HD</option>
+        <option value="playlist_sd.m3u">فقط فارسی SD</option>
         <option value="custom">آدرس دلخواه...</option>
       </select>
 
@@ -625,10 +635,20 @@
     let currentChannelIdx = -1;
     let activeTab = 'all';
     let currentSourceUrl = '';
-    let favorites = JSON.parse(localStorage.getItem('iptv_favorites') || '[]');
     let hls = null;
+    let toastTimer = null;
 
-    // Retry settings
+    function readFavorites() {
+      try {
+        const value = JSON.parse(localStorage.getItem('iptv_favorites') || '[]');
+        return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    let favorites = readFavorites();
+
     const RETRY_SECONDS = 5;
     let retryInterval = null;
     let isAutoRetrying = false;
@@ -642,7 +662,6 @@
     const sourceSelector = document.getElementById('source-selector');
     const urlLoader = document.getElementById('url-loader');
     const toast = document.getElementById('toast');
-
     const errorOverlay = document.getElementById('player-error-overlay');
     const autoRetryContainer = document.getElementById('auto-retry-container');
     const manualRetryContainer = document.getElementById('manual-retry-container');
@@ -653,11 +672,23 @@
     function showToast(message) {
       toast.textContent = message;
       toast.classList.add('show');
-      setTimeout(() => toast.classList.remove('show'), 2500);
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2800);
     }
 
     function setStatus(state) {
       statusIndicator.className = `status-dot ${state}`;
+    }
+
+    function resolveHttpUrl(value, baseUrl = '') {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      try {
+        const url = baseUrl ? new URL(raw, baseUrl) : new URL(raw);
+        return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '';
+      } catch (_) {
+        return '';
+      }
     }
 
     function hideOverlays() {
@@ -678,28 +709,23 @@
     function startAutoRetryCountdown() {
       if (isAutoRetrying) return;
       isAutoRetrying = true;
-
       setStatus('buffering');
       errorOverlay.classList.add('active');
       autoRetryContainer.style.display = 'flex';
       manualRetryContainer.style.display = 'none';
 
       let secondsLeft = RETRY_SECONDS;
-      retryCountdownEl.textContent = secondsLeft;
-
-      // هر ثانیه شمارش معکوس را به‌روز و در صورت لزوم درخواست بارگذاری مجدد می‌دهد
+      retryCountdownEl.textContent = String(secondsLeft);
       retryInterval = setInterval(() => {
-        secondsLeft--;
-        retryCountdownEl.textContent = secondsLeft;
+        secondsLeft -= 1;
+        retryCountdownEl.textContent = String(Math.max(secondsLeft, 0));
 
-        // تلاش میانی در پس‌زمینه
-        if (hls && secondsLeft % 2 === 0) {
-          hls.startLoad();
+        if (hls && secondsLeft > 0 && secondsLeft % 2 === 0) {
+          try { hls.startLoad(); } catch (_) {}
         }
-
         if (secondsLeft <= 0) {
           stopAutoRetry();
-          showManualRetry('عدم موفقیت در برقراری ارتباط پس از چند تلاش.');
+          showManualRetry('پس از چند تلاش، اتصال برقرار نشد.');
         }
       }, 1000);
     }
@@ -707,254 +733,340 @@
     function showManualRetry(message) {
       stopAutoRetry();
       if (hls) {
-        hls.destroy();
+        try { hls.destroy(); } catch (_) {}
         hls = null;
       }
       setStatus('error');
-      errorMsgText.textContent = message || 'امکان پخش زنده این شبکه وجود ندارد.';
+      errorMsgText.textContent = message || 'پخش زندهٔ این شبکه ممکن نیست.';
       errorOverlay.classList.add('active');
       autoRetryContainer.style.display = 'none';
       manualRetryContainer.style.display = 'flex';
     }
 
-    function parseM3U(content) {
-      const lines = content.split('\n');
-      const list = [];
-      let temp = null;
+    function readAttribute(line, key) {
+      const match = line.match(new RegExp(`(?:^|\\s)${key}="([^"]*)"`, 'i'));
+      return match ? match[1] : '';
+    }
 
-      for (let rawLine of lines) {
+    function isHighQuality(quality, name) {
+      const value = `${quality || ''} ${name || ''}`;
+      return /\b(?:uhd|hd|4k|8k)\b|(?:^|\D)(?:720|1080|1440|2160)\s*[pi]?(?:\D|$)/i.test(value);
+    }
+
+    function parseM3U(content, baseUrl = '') {
+      const lines = String(content || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+      const list = [];
+      let current = null;
+
+      for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line) continue;
 
         if (line.startsWith('#EXTINF:')) {
-          const idMatch = line.match(/tvg-id="([^"]*)"/);
-          const nameMatch = line.match(/tvg-name="([^"]*)"/);
-          const groupMatch = line.match(/group-title="([^"]*)"/);
-          const qualityMatch = line.match(/tvg-quality="([^"]*)"/);
-
-          const titlePart = line.split(',').slice(1).join(',').trim();
-          const channelName = (nameMatch && nameMatch[1]) || titlePart || 'شبکه بدون نام';
-
-          temp = {
-            id: (idMatch && idMatch[1]) || '',
-            name: channelName,
-            group: (groupMatch && groupMatch[1]) || 'عمومی',
-            quality: (qualityMatch && qualityMatch[1]) || '',
-            url: ''
+          const comma = line.indexOf(',');
+          const titlePart = comma >= 0 ? line.slice(comma + 1).trim() : '';
+          const name = readAttribute(line, 'tvg-name') || titlePart || 'شبکه بدون نام';
+          const quality = readAttribute(line, 'tvg-quality');
+          current = {
+            id: readAttribute(line, 'tvg-id'),
+            name,
+            group: readAttribute(line, 'group-title') || 'عمومی',
+            language: readAttribute(line, 'tvg-language'),
+            logo: readAttribute(line, 'tvg-logo'),
+            quality,
+            url: '',
+            isHD: isHighQuality(quality, name)
           };
-          temp.isHD = /hd|1080|720/i.test(temp.quality) || /hd|1080|720/i.test(temp.name);
-        } else if (!line.startsWith('#') && temp) {
-          temp.url = line;
-          list.push(temp);
-          temp = null;
+          continue;
         }
+
+        if (line.startsWith('#') || !current) continue;
+        const streamUrl = resolveHttpUrl(line, baseUrl);
+        if (streamUrl) {
+          current.url = streamUrl;
+          list.push(current);
+        }
+        current = null;
       }
       return list;
     }
 
+    function createSvgButton(kind, title, isFavorite = false) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `icon-btn ${kind}-btn${isFavorite ? ' is-fav' : ''}`;
+      button.title = title;
+      button.setAttribute('aria-label', title);
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', kind === 'share' ? '15' : '16');
+      svg.setAttribute('height', kind === 'share' ? '15' : '16');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      if (kind === 'share') {
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        [
+          'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71',
+          'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'
+        ].forEach(d => {
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', d);
+          svg.appendChild(path);
+        });
+      } else {
+        svg.setAttribute('fill', 'currentColor');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z');
+        svg.appendChild(path);
+      }
+      button.appendChild(svg);
+      return button;
+    }
+
     function renderChannels() {
-      const q = searchInput.value.toLowerCase().trim();
+      const query = searchInput.value.toLowerCase().trim();
       const selectedGroup = groupFilter.value;
-      channelListEl.innerHTML = '';
+      channelListEl.replaceChildren();
 
-      const filtered = channels.filter((c) => {
-        const matchesQuery = c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
-        const matchesGroup = !selectedGroup || c.group === selectedGroup;
-        const isFav = favorites.includes(c.id || c.name);
-
-        if (activeTab === 'favs' && !isFav) return false;
-        if (activeTab === 'hd' && !c.isHD) return false;
-
+      const filtered = channels.filter(channel => {
+        const searchable = `${channel.name} ${channel.id} ${channel.group} ${channel.language || ''}`.toLowerCase();
+        const matchesQuery = searchable.includes(query);
+        const matchesGroup = !selectedGroup || channel.group === selectedGroup;
+        const isFavorite = favorites.includes(channel.id || channel.name);
+        if (activeTab === 'favs' && !isFavorite) return false;
+        if (activeTab === 'hd' && !channel.isHD) return false;
         return matchesQuery && matchesGroup;
       });
 
       if (filtered.length === 0) {
-        channelListEl.innerHTML = `<li style="text-align:center; padding: 30px; color: var(--text-muted); font-size: 0.85rem;">شبکه‌ای پیدا نشد</li>`;
+        const empty = document.createElement('li');
+        empty.textContent = 'شبکه‌ای پیدا نشد';
+        empty.style.cssText = 'text-align:center;padding:30px;color:var(--text-muted);font-size:.85rem';
+        channelListEl.appendChild(empty);
         return;
       }
 
-      filtered.forEach((c) => {
-        const realIdx = channels.indexOf(c);
-        const isFav = favorites.includes(c.id || c.name);
-        const isActive = realIdx === currentChannelIdx;
+      filtered.forEach(channel => {
+        const index = channels.indexOf(channel);
+        const favoriteKey = channel.id || channel.name;
+        const isFavorite = favorites.includes(favoriteKey);
+        const item = document.createElement('li');
+        item.className = `channel-item${index === currentChannelIdx ? ' active' : ''}`;
+        item.tabIndex = 0;
+        item.setAttribute('aria-label', `پخش ${channel.name}`);
 
-        const li = document.createElement('li');
-        li.className = `channel-item ${isActive ? 'active' : ''}`;
-        li.innerHTML = `
-          <div class="channel-info">
-            <span class="channel-title">${c.name}</span>
-            <div class="channel-meta">
-              ${c.isHD ? '<span class="badge badge-hd">HD</span>' : '<span class="badge">SD</span>'}
-              <span>${c.group}</span>
-            </div>
-          </div>
-          <div class="channel-actions">
-            <button class="icon-btn share-btn" title="اشتراک‌گذاری">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            </button>
-            <button class="icon-btn fav-btn ${isFav ? 'is-fav' : ''}" title="نشان کردن">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
-              </svg>
-            </button>
-          </div>
-        `;
+        const info = document.createElement('div');
+        info.className = 'channel-info';
+        const title = document.createElement('span');
+        title.className = 'channel-title';
+        title.textContent = channel.name;
+        const meta = document.createElement('div');
+        meta.className = 'channel-meta';
+        const badge = document.createElement('span');
+        badge.className = `badge${channel.isHD ? ' badge-hd' : ''}`;
+        badge.textContent = channel.isHD ? 'HD' : (channel.quality && channel.quality !== 'Unknown' ? channel.quality : 'SD');
+        const group = document.createElement('span');
+        group.textContent = channel.group;
+        meta.append(badge, group);
+        info.append(title, meta);
 
-        li.onclick = (e) => {
-          if (e.target.closest('.icon-btn')) return;
-          playChannel(realIdx, true);
-        };
-
-        li.querySelector('.fav-btn').onclick = () => toggleFavorite(c.id || c.name);
-        li.querySelector('.share-btn').onclick = () => shareChannel(c);
-
-        channelListEl.appendChild(li);
+        const actions = document.createElement('div');
+        actions.className = 'channel-actions';
+        const shareButton = createSvgButton('share', 'اشتراک‌گذاری');
+        const favoriteButton = createSvgButton('fav', isFavorite ? 'حذف از علاقه‌مندی‌ها' : 'افزودن به علاقه‌مندی‌ها', isFavorite);
+        shareButton.addEventListener('click', event => {
+          event.stopPropagation();
+          shareChannel(channel);
+        });
+        favoriteButton.addEventListener('click', event => {
+          event.stopPropagation();
+          toggleFavorite(favoriteKey);
+        });
+        actions.append(shareButton, favoriteButton);
+        item.append(info, actions);
+        item.addEventListener('click', () => playChannel(index, true));
+        item.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            playChannel(index, true);
+          }
+        });
+        channelListEl.appendChild(item);
       });
     }
 
     function populateGroups() {
-      const groups = [...new Set(channels.map(c => c.group))].filter(Boolean).sort();
-      groupFilter.innerHTML = '<option value="">همه دسته‌ها</option>';
-      groups.forEach(g => {
-        const opt = document.createElement('option');
-        opt.value = g;
-        opt.textContent = g;
-        groupFilter.appendChild(opt);
+      const selected = groupFilter.value;
+      groupFilter.replaceChildren();
+      const defaultOption = document.createElement('option');
+      defaultOption.value = '';
+      defaultOption.textContent = 'همهٔ دسته‌ها';
+      groupFilter.appendChild(defaultOption);
+      [...new Set(channels.map(channel => channel.group).filter(Boolean))].sort().forEach(value => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        groupFilter.appendChild(option);
       });
+      if ([...groupFilter.options].some(option => option.value === selected)) groupFilter.value = selected;
     }
 
     function toggleFavorite(id) {
-      if (favorites.includes(id)) {
-        favorites = favorites.filter(item => item !== id);
-      } else {
-        favorites.push(id);
+      favorites = favorites.includes(id) ? favorites.filter(item => item !== id) : [...favorites, id];
+      try {
+        localStorage.setItem('iptv_favorites', JSON.stringify(favorites));
+      } catch (_) {
+        showToast('ذخیرهٔ علاقه‌مندی‌ها در این مرورگر ممکن نیست.');
       }
-      localStorage.setItem('iptv_favorites', JSON.stringify(favorites));
       renderChannels();
     }
 
-    function shareChannel(channel) {
-      const shareUrl = new URL(window.location.origin + window.location.pathname);
+    async function copyText(value) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+      const input = document.createElement('textarea');
+      input.value = value;
+      input.setAttribute('readonly', '');
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+      input.select();
+      let copied = false;
+      try { copied = document.execCommand('copy'); } catch (_) {}
+      input.remove();
+      return copied;
+    }
+
+    async function shareChannel(channel) {
+      const shareUrl = new URL(window.location.href);
       shareUrl.searchParams.set('channel', channel.id || channel.name);
       if (currentSourceUrl) shareUrl.searchParams.set('url', currentSourceUrl);
-
-      navigator.clipboard.writeText(shareUrl.toString()).then(() => {
-        showToast('پیوند کانال کپی شد: ' + channel.name);
-      });
+      try {
+        const copied = await copyText(shareUrl.toString());
+        showToast(copied ? `پیوند ${channel.name} کپی شد.` : 'کپی خودکار در این مرورگر در دسترس نیست.');
+      } catch (_) {
+        showToast('کپی پیوند انجام نشد؛ دسترسی Clipboard را بررسی کنید.');
+      }
     }
 
     function updateUrlState(channel) {
-      const url = new URL(window.location);
+      const url = new URL(window.location.href);
       url.searchParams.set('channel', channel.id || channel.name);
       if (currentSourceUrl) url.searchParams.set('url', currentSourceUrl);
+      else url.searchParams.delete('url');
       window.history.replaceState({}, '', url);
+    }
+
+    function stopCurrentStream() {
+      if (hls) {
+        try { hls.destroy(); } catch (_) {}
+        hls = null;
+      }
+      video.onerror = null;
+      video.onloadedmetadata = null;
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
     }
 
     function playChannel(index, updateHistory = false) {
       if (index < 0 || index >= channels.length) return;
       currentChannelIdx = index;
       const channel = channels[index];
-
       hideOverlays();
+      stopCurrentStream();
       nowPlayingTitle.textContent = channel.name;
       setStatus('buffering');
       renderChannels();
-
       if (updateHistory) updateUrlState(channel);
 
-      if (hls) {
-        hls.destroy();
-        hls = null;
-      }
-
-      if (Hls.isSupported()) {
-        hls = new Hls({ 
-          enableWorker: true, 
-          lowLatencyMode: true, 
+      const HlsPlayer = window.Hls;
+      if (HlsPlayer && typeof HlsPlayer.isSupported === 'function' && HlsPlayer.isSupported()) {
+        const instance = new HlsPlayer({
+          enableWorker: true,
+          lowLatencyMode: true,
           backBufferLength: 60,
           manifestLoadingMaxRetry: 2,
           levelLoadingMaxRetry: 2
         });
-        
-        hls.loadSource(channel.url);
-        hls.attachMedia(video);
-
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(() => {});
+        hls = instance;
+        instance.on(HlsPlayer.Events.MANIFEST_PARSED, () => {
+          if (hls === instance) video.play().catch(() => {});
         });
-
-        // مدیریت خطا: اجرای تلاش چند ثانیه‌ای
-        hls.on(Hls.Events.ERROR, (_, data) => {
-          if (data.fatal) {
-            if (!isAutoRetrying) {
-              startAutoRetryCountdown();
-              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-              else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        instance.on(HlsPlayer.Events.ERROR, (_, data) => {
+          if (!data.fatal || hls !== instance) return;
+          if (!isAutoRetrying) {
+            startAutoRetryCountdown();
+            if (data.type === HlsPlayer.ErrorTypes.NETWORK_ERROR) {
+              try { instance.startLoad(); } catch (_) {}
+            } else if (data.type === HlsPlayer.ErrorTypes.MEDIA_ERROR) {
+              try { instance.recoverMediaError(); } catch (_) {}
             }
           }
         });
+        instance.loadSource(channel.url);
+        instance.attachMedia(video);
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = channel.url;
-        
-        video.onloadedmetadata = () => {
-          video.play().catch(() => {});
-        };
-
+        video.onloadedmetadata = () => video.play().catch(() => {});
         video.onerror = () => {
-          if (!isAutoRetrying) {
-            startAutoRetryCountdown();
-          }
+          if (!isAutoRetrying) startAutoRetryCountdown();
         };
+      } else {
+        showManualRetry('این مرورگر پخش HLS را پشتیبانی نمی‌کند. مرورگر دیگری را امتحان کنید.');
       }
     }
 
-    // پخش موفقیت‌آمیز استریم
     video.addEventListener('playing', () => {
       hideOverlays();
       setStatus('online');
     });
-
-    // کلیک دکمه «تلاش مجدد» دستی
     retryBtn.addEventListener('click', () => {
-      if (currentChannelIdx >= 0) {
-        playChannel(currentChannelIdx);
-      }
+      if (currentChannelIdx >= 0) playChannel(currentChannelIdx);
     });
 
-    function loadFromUrl(url, targetChannelName = null) {
-      if (!url) return;
+    async function loadFromUrl(url, targetChannelName = null) {
+      const playlistUrl = resolveHttpUrl(url, window.location.href);
+      if (!playlistUrl) {
+        showToast('نشانی پلی‌لیست معتبر نیست؛ فقط HTTP یا HTTPS مجاز است.');
+        return;
+      }
       currentSourceUrl = url;
+      channels = [];
+      currentChannelIdx = -1;
+      stopCurrentStream();
+      hideOverlays();
+      populateGroups();
+      renderChannels();
       setStatus('buffering');
-      showToast('در حال بارگذاری لیست...');
+      showToast('در حال بارگذاری فهرست...');
 
-      fetch(url)
-        .then(res => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.text();
-        })
-        .then(text => {
-          channels = parseM3U(text);
-          populateGroups();
-          renderChannels();
+      try {
+        const response = await fetch(playlistUrl, { cache: 'no-cache' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const text = await response.text();
+        const parsed = parseM3U(text, playlistUrl);
+        if (parsed.length === 0) throw new Error('در این فهرست کانال قابل پخشی پیدا نشد.');
+        channels = parsed;
+        populateGroups();
+        renderChannels();
 
-          if (targetChannelName) {
-            const targetIdx = channels.findIndex(
-              c => c.name.toLowerCase() === targetChannelName.toLowerCase() || 
-                   c.id.toLowerCase() === targetChannelName.toLowerCase()
-            );
-            if (targetIdx !== -1) {
-              playChannel(targetIdx);
-              return;
-            }
-          }
-
-          if (channels.length > 0) playChannel(0);
-          showToast(`لیست پخش با ${channels.length} شبکه آماده شد`);
-        })
-        .catch(err => {
-          setStatus('error');
-          alert('خطا در بارگذاری: ' + err.message);
-        });
+        const target = targetChannelName ? targetChannelName.toLowerCase() : '';
+        const targetIndex = target ? channels.findIndex(channel =>
+          channel.name.toLowerCase() === target || channel.id.toLowerCase() === target
+        ) : -1;
+        playChannel(targetIndex >= 0 ? targetIndex : 0);
+        showToast(`فهرست با ${channels.length} شبکه آماده شد.`);
+      } catch (error) {
+        channels = [];
+        populateGroups();
+        renderChannels();
+        setStatus('error');
+        showToast(`بارگذاری فهرست ناموفق بود: ${error.message}`);
+      }
     }
 
     sourceSelector.addEventListener('change', () => {
@@ -968,50 +1080,77 @@
     });
 
     document.getElementById('btn-load-url').addEventListener('click', () => {
-      const selected = sourceSelector.value;
-      const targetUrl = (selected === 'custom') ? urlLoader.value.trim() : selected;
+      const targetUrl = sourceSelector.value === 'custom' ? urlLoader.value.trim() : sourceSelector.value;
       if (targetUrl) loadFromUrl(targetUrl);
     });
-
-    document.getElementById('file-loader').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      currentSourceUrl = '';
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        channels = parseM3U(event.target.result);
-        populateGroups();
-        renderChannels();
-        if (channels.length > 0) playChannel(0);
-      };
-      reader.readAsText(file);
+    urlLoader.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        loadFromUrl(urlLoader.value.trim());
+      }
     });
 
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activeTab = btn.dataset.tab;
+    document.getElementById('file-loader').addEventListener('change', event => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      currentSourceUrl = '';
+      const reader = new FileReader();
+      reader.onload = loadEvent => {
+        channels = parseM3U(loadEvent.target.result);
+        currentChannelIdx = -1;
+        stopCurrentStream();
+        populateGroups();
+        renderChannels();
+        if (channels.length > 0) {
+          playChannel(0);
+          showToast(`فایل با ${channels.length} شبکه بارگذاری شد.`);
+        } else {
+          showToast('در فایل، پیوند HTTP(S) قابل پخشی پیدا نشد.');
+        }
+      };
+      reader.onerror = () => showToast('خواندن فایل ناموفق بود.');
+      reader.readAsText(file);
+      event.target.value = '';
+    });
+
+    document.querySelectorAll('.tab-btn').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(item => item.classList.remove('active'));
+        button.classList.add('active');
+        activeTab = button.dataset.tab;
         renderChannels();
       });
     });
-
     searchInput.addEventListener('input', renderChannels);
     groupFilter.addEventListener('change', renderChannels);
+
+    document.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.target.closest && event.target.closest('input, select, textarea, button, [contenteditable="true"]')) return;
+      const key = event.key.toLowerCase();
+      if (key === 'f') {
+        event.preventDefault();
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        else if (video.requestFullscreen) video.requestFullscreen().catch(() => {});
+      } else if (key === 'm') {
+        video.muted = !video.muted;
+      } else if (key === 'n' && currentChannelIdx < channels.length - 1) {
+        playChannel(currentChannelIdx + 1, true);
+      } else if (key === 'p' && currentChannelIdx > 0) {
+        playChannel(currentChannelIdx - 1, true);
+      }
+    });
 
     window.addEventListener('DOMContentLoaded', () => {
       const params = new URLSearchParams(window.location.search);
       const deepLinkUrl = params.get('url');
       const deepLinkChannel = params.get('channel');
       const initialSource = deepLinkUrl || sourceSelector.value;
-
       if (deepLinkUrl) {
         sourceSelector.value = 'custom';
         urlLoader.style.display = 'inline-block';
         urlLoader.value = deepLinkUrl;
       }
-
       loadFromUrl(initialSource, deepLinkChannel);
     });
   </script>
