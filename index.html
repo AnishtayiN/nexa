@@ -619,14 +619,20 @@
         display: none;
       }
 
+      .quality-control.is-fixed {
+        gap: 0;
+        padding: 3px 6px;
+      }
+
+      .quality-control.is-fixed label,
       .quality-control.is-fixed .quality-hint {
-        display: block;
-        max-width: 118px;
-        white-space: normal;
+        display: none;
       }
 
       .quality-fixed {
         max-width: 102px;
+        padding: 4px 6px;
+        font-size: 0.68rem;
       }
     }
   </style>
@@ -803,6 +809,7 @@
       qualityFixed.hidden = false;
       qualityFixed.textContent = label;
       qualityFixed.title = message;
+      qualityFixed.setAttribute('aria-label', `کیفیت: ${label}. ${message}`);
       qualityControl.classList.add('is-fixed');
       qualitySelector.title = message;
       qualityHint.textContent = message;
@@ -823,6 +830,7 @@
       qualityFixed.hidden = false;
       qualityFixed.textContent = label;
       qualityFixed.title = message;
+      qualityFixed.setAttribute('aria-label', `کیفیت: ${label}. ${message}`);
       qualityControl.classList.add('is-fixed');
       qualitySelector.title = message;
       qualityHint.textContent = message;
@@ -956,11 +964,12 @@
     }
 
     function updateCurrentQuality(instance, data) {
-      if (hls !== instance || !data || !Number.isInteger(Number(data.level))) return;
+      if (hls !== instance || qualityControl.classList.contains('is-fixed') || !data || !Number.isInteger(Number(data.level))) return;
       const level = instance.levels && instance.levels[Number(data.level)];
       if (!level) return;
+      const active = currentPlaybackEntry || channels[currentChannelIdx];
       const mode = qualitySelector.value === 'auto' ? 'خودکار' : 'دستی';
-      qualityHint.textContent = `${mode}: اکنون ${formatLevel(level)}`;
+      qualityHint.textContent = `${mode}: اکنون ${currentQualityLabel(level, active)}`;
     }
 
     qualitySelector.addEventListener('change', () => {
