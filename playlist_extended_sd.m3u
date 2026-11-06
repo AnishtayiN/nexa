@@ -7,8 +7,6 @@ https://4kuhls.persiana.live/hls/stream.m3u8
 https://ncdn.telewebion.ir/abadan/live/playlist.m3u8
 #EXTINF:-1 tvg-id="AflakTV.ir" tvg-name="Aflak TV" group-title="General" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Aflak TV
 https://ncdn.telewebion.ir/aflak/live/playlist.m3u8
-#EXTINF:-1 tvg-id="AFNTV.ir" tvg-name="AFN TV" group-title="Music" tvg-language="fas" tvg-quality="576i" tvg-country="IR",AFN TV
-https://bozztv.com/1gbw5/tintv2/tintv2/playlist.m3u8
 #EXTINF:-1 tvg-id="AftabTV.ir" tvg-name="Aftab TV" group-title="IR" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Aftab TV
 https://ncdn.telewebion.ir/aftab/live/playlist.m3u8
 #EXTINF:-1 tvg-id="AlborzTV.ir" tvg-name="Alborz TV" group-title="General" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Alborz TV
@@ -133,8 +131,6 @@ https://live.presstv.co.uk/hls/ifilmfa.m3u8
 https://ncdn.telewebion.ir/ifilm/live/playlist.m3u8
 #EXTINF:-1 tvg-id="IlamTV.ir" tvg-name="Ilam TV" group-title="General" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Ilam TV
 https://ncdn.telewebion.ir/ilam/live/playlist.m3u8
-#EXTINF:-1 tvg-id="IranJewishTV.ir" tvg-name="Iran Jewish TV" group-title="Religious" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Iran Jewish TV
-http://iran620.com:1935/live/IranJewishTv/playlist.m3u8
 #EXTINF:-1 tvg-id="IranNama.fr" tvg-name="Iran Nama" group-title="FR" tvg-language="fas" tvg-quality="576i" tvg-country="FR",Iran Nama
 https://iran613hls.wns.live/hls/stream.m3u8
 #EXTINF:-1 tvg-id="IranPress.ir" tvg-name="Iran Press" group-title="News" tvg-language="fas;eng" tvg-quality="576i" tvg-country="IR",Iran Press
