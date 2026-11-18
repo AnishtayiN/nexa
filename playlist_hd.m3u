@@ -145,6 +145,8 @@ https://pmcrohls.wns.live/hls/stream.m3u8
 https://avr.host247.net/live/rasoulallahtv/playlist.m3u8
 #EXTINF:-1 tvg-id="RJTV.us" tvg-name="RJTV" group-title="Music" tvg-language="fas" tvg-quality="1080p" tvg-country="US",RJTV
 https://rjtvhls.wns.live/hls/stream.m3u8
+#EXTINF:-1 tvg-id="RoyaTV.ir" tvg-name="Roya TV" group-title="IR" tvg-language="fas" tvg-quality="720p" tvg-country="IR",Roya TV
+https://ncdn.telewebion.ir/iribu/live/playlist.m3u8
 #EXTINF:-1 tvg-id="SetarehTV.uk" tvg-name="Setareh TV" group-title="UK" tvg-language="fas" tvg-quality="HD" tvg-country="UK",Setareh TV
 https://setarehhls.wns.live/hls/stream.m3u8
 #EXTINF:-1 tvg-id="SimayeAzadi.uk" tvg-name="Simaye Azadi" group-title="General" tvg-language="fas" tvg-quality="1080p" tvg-country="UK",Simaye Azadi

@@ -245,8 +245,6 @@ https://ncdn.telewebion.ir/qazvin/live/playlist.m3u8
 https://ncdn.telewebion.ir/quran/live/playlist.m3u8
 #EXTINF:-1 tvg-id="RazaviTV.ir" tvg-name="Razavi TV" group-title="IR" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Razavi TV
 https://ncdn.telewebion.ir/razavi/live/playlist.m3u8
-#EXTINF:-1 tvg-id="RoyaTV.ir" tvg-name="Roya TV" group-title="IR" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Roya TV
-https://ncdn.telewebion.ir/iribu/live/playlist.m3u8
 #EXTINF:-1 tvg-id="SabalanTV.ir" tvg-name="Sabalan TV" group-title="IR" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Sabalan TV
 https://ncdn.telewebion.ir/sabalan/live/playlist.m3u8
 #EXTINF:-1 tvg-id="SabzTV.ir" tvg-name="Sabz TV" group-title="General" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Sabz TV
@@ -259,7 +257,7 @@ https://ncdn.telewebion.ir/salamat/live/playlist.m3u8
 https://ncdn.telewebion.ir/sarbedaran/live/playlist.m3u8
 #EXTINF:-1 tvg-id="Sat7Pars.cy" tvg-name="Sat 7 Pars" group-title="Religious" tvg-language="fas" tvg-quality="576i" tvg-country="CY",Sat 7 Pars
 https://sat7phls.wns.live/hls/stream.m3u8
-#EXTINF:-1 tvg-id="SemnanTV.ir" tvg-name="Semnan TV" group-title="IR" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Semnan TV
+#EXTINF:-1 tvg-id="SemnanTV.ir" tvg-name="Semnan TV" group-title="IR" tvg-language="fas" tvg-quality="576p" tvg-country="IR",Semnan TV
 https://ncdn.telewebion.ir/semnan/live/playlist.m3u8
 #EXTINF:-1 tvg-id="SepehrTV.ir" tvg-name="Sepehr TV" group-title="IR" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Sepehr TV
 https://ncdn.telewebion.ir/sepehr/live/playlist.m3u8
@@ -305,5 +303,5 @@ https://ncdn.telewebion.ir/taban/live/playlist.m3u8
 https://hls.yourtime.live/hls/stream.m3u8
 #EXTINF:-1 tvg-id="YourTimeTV.ir" tvg-name="YourTime TV" group-title="Entertainment" tvg-language="fas" tvg-quality="576i" tvg-country="IR",YourTime TV
 https://live.yourtime.tv/hls/stream.m3u8
-#EXTINF:-1 tvg-id="ZagrosTV.ir" tvg-name="Zagros TV" group-title="General" tvg-language="fas" tvg-quality="576i" tvg-country="IR",Zagros TV
+#EXTINF:-1 tvg-id="ZagrosTV.ir" tvg-name="Zagros TV" group-title="General" tvg-language="fas" tvg-quality="576p" tvg-country="IR",Zagros TV
 https://ncdn.telewebion.ir/zagros/live/playlist.m3u8
